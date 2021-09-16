@@ -1,0 +1,146 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: rocketchat
+  namespace: namespace-name
+spec:
+  selector:
+    matchLabels:
+      service: rocketchat
+  template:
+    metadata:
+      labels:
+        service: rocketchat
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: performance
+                operator: In
+                values:
+                - high
+      volumes:
+      - name: rocketchat-data
+        hostPath:
+          path: "/cluster/storage/namespace-name/rocketchat/uploads"
+          type: "DirectoryOrCreate"
+      containers:
+      - name: rocketchat
+        image: "rocket.rocketchat:3.0.7"
+        env:
+        - name: PORT
+          value: '3000'
+        - name: ROOT_URL
+          value: "https://rocketchat.domain.tld"
+        - name: DEPLOY_METHOD
+          value: docker
+        - name: NODE_ENV
+          value: production
+        - name: MONGO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: rocketchat-secrets
+              key: mongopw
+        - name: MONGO_URL
+          value: "mongodb://root:$(MONGO_PASSWORD)@rocketchat-db:27017/rocketrocketchat?authSource=admin"
+        - name: MONGO_OPLOG_URL
+          value: "mongodb://root:$(MONGO_PASSWORD)@rocketchat-db:27017/local?authSource=admin"
+        volumeMounts:
+        - mountPath: "/app/uploads"
+          name: rocketchat-data
+        ports:
+        - name: http
+          containerPort: 3000
+
+---
+
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: rocketchat-db
+  namespace: namespace-name
+spec:
+  selector:
+    matchLabels:
+      service: rocketchat-db
+  template:
+    metadata:
+      labels:
+        service: rocketchat-db
+    spec:
+      nodeSelector:
+        storageaccess: direct
+      volumes:
+      - name: rocketchat-db
+        hostPath:
+          path: "/cluster/namespace-name/rocketchat/db"
+          type: "DirectoryOrCreate"
+      containers:
+      - name: "rocketchat-db"
+        image: "mongo:4.0"
+        args: ["--bind_ip_all", "--replSet", "rs0", "--smallfiles", "--oplogSize", "128", "--storageEngine=mmapv1"]
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: root
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: rocketchat-secrets
+              key: mongopw
+        volumeMounts:
+        - mountPath: "/data/db"
+          name: rocketchat-db
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: rocketchat
+  namespace: namespace-name
+spec:
+  selector:
+    service: rocketchat
+  ports:
+  - protocol: TCP
+    port: 3000
+    name: http
+
+---
+
+kind: Service
+apiVersion: v1
+metadata:
+  name: rocketchat-db
+  namespace: namespace-name
+spec:
+  selector:
+    service: rocketchat-db
+  ports:
+  - protocol: TCP
+    port: 27017
+    name: db
+
+---
+
+kind: Ingress
+apiVersion: networking.k8s.io/v1beta1
+metadata:
+  name: rocketchat
+  namespace: namespace-name
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.frontend.passHostHeader: "false"
+spec:
+  rules:
+  - host: rocketchat.domain.tld
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: rocketchat
+          servicePort: http
+

@@ -1,0 +1,4 @@
+secrets.yml
+volumes/
+db/
+uploads/
